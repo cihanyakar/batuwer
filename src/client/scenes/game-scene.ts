@@ -1,62 +1,76 @@
 import Phaser from 'phaser';
-import { type GameSocket, getSocket, sendInput } from '../network';
-import { type Collectible, GAME_CONFIG, type GameState, type PlayerInput, type PlayerState } from '../../shared/types';
+import { getMapById } from '../../shared/maps';
+import { GAME_CONFIG, type MapDefinition, type PlayerInfo } from '../../shared/types';
+import { createButton } from '../ui/button';
 
-interface PlayerSprite {
-  body: Phaser.GameObjects.Arc;
-  nameLabel: Phaser.GameObjects.Text;
-  scoreLabel: Phaser.GameObjects.Text;
+const PATH_COLOR = 0xffdd44;
+const SLOT_COLOR = 0x4488ff;
+const SPAWN_COLOR = 0x44ff44;
+const END_COLOR = 0xff4444;
+
+interface GameSceneData {
+  mapId: string;
+  mode: 'single' | 'multiplayer';
+  players?: PlayerInfo[];
 }
 
 export class GameScene extends Phaser.Scene {
-  private socket!: GameSocket;
-  private players = new Map<string, PlayerSprite>();
-  private collectibles = new Map<string, Phaser.GameObjects.Arc>();
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
-  private lastInput: PlayerInput = { left: false, right: false, up: false, down: false };
-
   constructor() {
     super({ key: 'GameScene' });
   }
 
-  update(): void {
-    const input: PlayerInput = {
-      left: this.cursors.left.isDown || this.wasd.A.isDown,
-      right: this.cursors.right.isDown || this.wasd.D.isDown,
-      up: this.cursors.up.isDown || this.wasd.W.isDown,
-      down: this.cursors.down.isDown || this.wasd.S.isDown,
-    };
-
-    if (
-      input.left !== this.lastInput.left ||
-      input.right !== this.lastInput.right ||
-      input.up !== this.lastInput.up ||
-      input.down !== this.lastInput.down
-    ) {
-      sendInput(input);
-      this.lastInput = { ...input };
+  create(data: GameSceneData): void {
+    const mapDef = getMapById(data.mapId);
+    if (mapDef === undefined) {
+      this.scene.start('MainMenuScene');
+      return;
     }
 
-    for (const sprite of this.players.values()) {
-      const glow = sprite.body.getData('glow') as Phaser.GameObjects.Arc | undefined;
-      if (glow !== undefined) {
-        glow.setPosition(sprite.body.x, sprite.body.y);
-      }
-    }
-  }
-
-  create(): void {
-    this.socket = getSocket();
     this.drawBackground();
-    this.setupInput();
-    this.setupSocketListeners();
+    this.drawMap(mapDef);
+
+    this.add.text(GAME_CONFIG.WORLD_WIDTH / 2, 30, mapDef.name, {
+      fontSize: '28px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+      fontStyle: 'bold',
+    }).setOrigin(0.5);
+
+    const modeText = data.mode === 'single' ? 'Single Player' : `${String(data.players?.length ?? 0)} Players`;
+    this.add.text(GAME_CONFIG.WORLD_WIDTH / 2, 60, modeText, {
+      fontSize: '16px',
+      fontFamily: 'monospace',
+      color: '#aaaacc',
+    }).setOrigin(0.5);
+
+    this.add.text(GAME_CONFIG.WORLD_WIDTH / 2, GAME_CONFIG.WORLD_HEIGHT / 2, 'Game Coming Soon...', {
+      fontSize: '32px',
+      fontFamily: 'monospace',
+      color: '#e94560',
+    }).setOrigin(0.5);
+
+    createButton({
+      scene: this,
+      x: 80,
+      y: GAME_CONFIG.WORLD_HEIGHT - 40,
+      width: 120,
+      height: 40,
+      label: 'LEAVE',
+      fontSize: '18px',
+      color: 0x533483,
+      hoverColor: 0x7b52ab,
+      onClick: () => {
+        this.scene.stop('HudScene');
+        this.scene.start('MainMenuScene');
+      },
+    });
+
+    this.scene.launch('HudScene', { mapName: mapDef.name, playerCount: data.players?.length ?? 1 });
   }
 
   private drawBackground(): void {
     const graphics = this.add.graphics();
-
-    graphics.lineStyle(1, 0x16213e, 0.5);
+    graphics.lineStyle(1, 0x16213e, 0.3);
     for (let x = 0; x <= GAME_CONFIG.WORLD_WIDTH; x += 40) {
       graphics.moveTo(x, 0);
       graphics.lineTo(x, GAME_CONFIG.WORLD_HEIGHT);
@@ -66,150 +80,87 @@ export class GameScene extends Phaser.Scene {
       graphics.lineTo(GAME_CONFIG.WORLD_WIDTH, y);
     }
     graphics.strokePath();
-
-    graphics.lineStyle(3, 0xe94560, 1);
-    graphics.strokeRect(0, 0, GAME_CONFIG.WORLD_WIDTH, GAME_CONFIG.WORLD_HEIGHT);
   }
 
-  private setupInput(): void {
-    const { keyboard } = this.input;
-    if (keyboard === null) {
-      throw new Error('Keyboard input not available');
-    }
-    this.cursors = keyboard.createCursorKeys();
-    this.wasd = {
-      W: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-      A: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-      S: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-      D: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D),
-    };
-  }
+  private drawMap(mapDef: MapDefinition): void {
+    const graphics = this.add.graphics();
 
-  private setupSocketListeners(): void {
-    this.socket.on('game:state', (state: GameState) => {
-      for (const player of Object.values(state.players)) {
-        this.addPlayerSprite(player);
+    // Paths
+    graphics.lineStyle(6, PATH_COLOR, 0.4);
+    for (const path of mapDef.paths) {
+      if (path.waypoints.length < 2) {
+        continue;
       }
-      for (const collectible of state.collectibles) {
-        this.addCollectibleSprite(collectible);
+      graphics.beginPath();
+      graphics.moveTo(path.waypoints[0].x, path.waypoints[0].y);
+      for (let j = 1; j < path.waypoints.length; j++) {
+        graphics.lineTo(path.waypoints[j].x, path.waypoints[j].y);
       }
-    });
+      graphics.strokePath();
+    }
 
-    this.socket.on('player:joined', (player: PlayerState) => {
-      this.addPlayerSprite(player);
-    });
-
-    this.socket.on('player:left', (playerId: string) => {
-      this.removePlayerSprite(playerId);
-    });
-
-    this.socket.on('player:moved', ({ id, x, y }) => {
-      const sprite = this.players.get(id);
-      if (sprite !== undefined) {
-        sprite.body.setPosition(x, y);
-        sprite.nameLabel.setPosition(x, y - GAME_CONFIG.PLAYER_RADIUS - 20);
-        sprite.scoreLabel.setPosition(x, y + GAME_CONFIG.PLAYER_RADIUS + 10);
+    // Path center line
+    graphics.lineStyle(2, PATH_COLOR, 0.8);
+    for (const path of mapDef.paths) {
+      if (path.waypoints.length < 2) {
+        continue;
       }
-    });
-
-    this.socket.on('player:scored', ({ id, score }) => {
-      const sprite = this.players.get(id);
-      if (sprite !== undefined) {
-        sprite.scoreLabel.setText(String(score));
+      graphics.beginPath();
+      graphics.moveTo(path.waypoints[0].x, path.waypoints[0].y);
+      for (let j = 1; j < path.waypoints.length; j++) {
+        graphics.lineTo(path.waypoints[j].x, path.waypoints[j].y);
       }
-      this.events.emit('score:update', { id, score });
-    });
-
-    this.socket.on('collectible:spawned', (collectible: Collectible) => {
-      this.addCollectibleSprite(collectible);
-    });
-
-    this.socket.on('collectible:collected', (collectibleId: string) => {
-      this.removeCollectibleSprite(collectibleId);
-    });
-  }
-
-  private addPlayerSprite(player: PlayerState): void {
-    if (this.players.has(player.id)) {
-      return;
+      graphics.strokePath();
     }
 
-    const body = this.add.circle(player.x, player.y, GAME_CONFIG.PLAYER_RADIUS, player.color);
-    body.setStrokeStyle(2, 0xffffff, 0.8);
-
-    const glow = this.add.circle(player.x, player.y, GAME_CONFIG.PLAYER_RADIUS + 4, player.color, 0.2);
-    body.setData('glow', glow);
-
-    const nameLabel = this.add.text(player.x, player.y - GAME_CONFIG.PLAYER_RADIUS - 20, player.name, {
-      fontSize: '14px',
-      fontFamily: 'monospace',
-      color: '#ffffff',
-      stroke: '#000000',
-      strokeThickness: 3,
-    }).setOrigin(0.5);
-
-    const scoreLabel = this.add.text(player.x, player.y + GAME_CONFIG.PLAYER_RADIUS + 10, String(player.score), {
-      fontSize: '12px',
-      fontFamily: 'monospace',
-      color: '#ffdd44',
-      stroke: '#000000',
-      strokeThickness: 2,
-    }).setOrigin(0.5);
-
-    this.players.set(player.id, { body, nameLabel, scoreLabel });
-  }
-
-  private removePlayerSprite(playerId: string): void {
-    const sprite = this.players.get(playerId);
-    if (sprite !== undefined) {
-      const glow = sprite.body.getData('glow') as Phaser.GameObjects.Arc | undefined;
-      glow?.destroy();
-      sprite.body.destroy();
-      sprite.nameLabel.destroy();
-      sprite.scoreLabel.destroy();
-      this.players.delete(playerId);
-    }
-  }
-
-  private addCollectibleSprite(collectible: Collectible): void {
-    if (this.collectibles.has(collectible.id)) {
-      return;
+    // Tower slots
+    for (const slot of mapDef.towerSlots) {
+      graphics.lineStyle(2, SLOT_COLOR, 0.8);
+      graphics.strokeRect(slot.position.x - 15, slot.position.y - 15, 30, 30);
+      graphics.fillStyle(SLOT_COLOR, 0.15);
+      graphics.fillRect(slot.position.x - 15, slot.position.y - 15, 30, 30);
     }
 
-    const colors = [0xffdd44, 0x44ffdd, 0xff44dd];
-    const color = colors[collectible.value - 1] ?? 0xffdd44;
+    // Spawn points
+    for (const sp of mapDef.spawnPoints) {
+      graphics.fillStyle(SPAWN_COLOR, 0.8);
+      graphics.fillCircle(sp.position.x, sp.position.y, 12);
+      graphics.lineStyle(2, 0xffffff, 0.5);
+      graphics.strokeCircle(sp.position.x, sp.position.y, 12);
+    }
 
-    const orb = this.add.circle(collectible.x, collectible.y, GAME_CONFIG.COLLECTIBLE_RADIUS, color);
-    orb.setStrokeStyle(1, 0xffffff, 0.6);
+    // End point
+    graphics.fillStyle(END_COLOR, 0.8);
+    graphics.fillCircle(mapDef.endPoint.x, mapDef.endPoint.y, 14);
+    graphics.lineStyle(2, 0xffffff, 0.5);
+    graphics.strokeCircle(mapDef.endPoint.x, mapDef.endPoint.y, 14);
 
-    this.tweens.add({
-      targets: orb,
-      scaleX: 1.3,
-      scaleY: 1.3,
-      alpha: 0.7,
-      duration: 800,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
-
-    this.collectibles.set(collectible.id, orb);
+    // Legend
+    this.drawLegend();
   }
 
-  private removeCollectibleSprite(collectibleId: string): void {
-    const orb = this.collectibles.get(collectibleId);
-    if (orb !== undefined) {
-      this.tweens.add({
-        targets: orb,
-        scaleX: 2,
-        scaleY: 2,
-        alpha: 0,
-        duration: 200,
-        onComplete: () => {
-          orb.destroy();
-        },
-      });
-      this.collectibles.delete(collectibleId);
-    }
+  private drawLegend(): void {
+    const lx = GAME_CONFIG.WORLD_WIDTH - 180;
+    const ly = GAME_CONFIG.WORLD_HEIGHT - 100;
+
+    const g = this.add.graphics();
+    g.fillStyle(0x0f3460, 0.8);
+    g.fillRoundedRect(lx - 10, ly - 10, 180, 90, 6);
+
+    g.fillStyle(PATH_COLOR, 0.8);
+    g.fillRect(lx, ly, 12, 3);
+    this.add.text(lx + 20, ly, 'Enemy Path', { fontSize: '11px', fontFamily: 'monospace', color: '#ffffff' }).setOrigin(0, 0.3);
+
+    g.fillStyle(SLOT_COLOR, 0.6);
+    g.fillRect(lx, ly + 20, 10, 10);
+    this.add.text(lx + 20, ly + 25, 'Tower Slot', { fontSize: '11px', fontFamily: 'monospace', color: '#ffffff' }).setOrigin(0, 0.3);
+
+    g.fillStyle(SPAWN_COLOR, 0.8);
+    g.fillCircle(lx + 5, ly + 50, 5);
+    this.add.text(lx + 20, ly + 50, 'Spawn Point', { fontSize: '11px', fontFamily: 'monospace', color: '#ffffff' }).setOrigin(0, 0.3);
+
+    g.fillStyle(END_COLOR, 0.8);
+    g.fillCircle(lx + 5, ly + 70, 5);
+    this.add.text(lx + 20, ly + 70, 'End Point', { fontSize: '11px', fontFamily: 'monospace', color: '#ffffff' }).setOrigin(0, 0.3);
   }
 }

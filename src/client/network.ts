@@ -1,5 +1,5 @@
 import { type Socket, io } from 'socket.io-client';
-import type { ClientToServerEvents, PlayerInput, ServerToClientEvents } from '../shared/types';
+import type { ClientToServerEvents, LobbyId, PlayerId, ServerToClientEvents } from '../shared/types';
 
 export type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -9,12 +9,13 @@ export function connect(): GameSocket {
   if (socket?.connected === true) {
     return socket;
   }
-
-  socket = io(window.location.origin, {
-    transports: ['websocket'],
-  }) as GameSocket;
-
+  socket = io(window.location.origin, { transports: ['websocket'] }) as GameSocket;
   return socket;
+}
+
+export function disconnect(): void {
+  socket?.disconnect();
+  socket = null;
 }
 
 export function getSocket(): GameSocket {
@@ -24,10 +25,38 @@ export function getSocket(): GameSocket {
   return socket;
 }
 
-export function joinGame(name: string): void {
-  getSocket().emit('player:join', name);
+export function isConnected(): boolean {
+  return socket?.connected === true;
 }
 
-export function sendInput(input: PlayerInput): void {
-  getSocket().emit('player:input', input);
+export function requestLobbyList(): void {
+  getSocket().emit('lobby:list-request');
+}
+
+export function createLobby(lobbyName: string, playerName: string): void {
+  getSocket().emit('lobby:create', lobbyName, playerName);
+}
+
+export function joinLobby(lobbyId: LobbyId, playerName: string): void {
+  getSocket().emit('lobby:join', lobbyId, playerName);
+}
+
+export function leaveLobby(): void {
+  getSocket().emit('lobby:leave');
+}
+
+export function toggleReady(): void {
+  getSocket().emit('lobby:toggle-ready');
+}
+
+export function selectMap(mapId: string): void {
+  getSocket().emit('lobby:select-map', mapId);
+}
+
+export function requestStartGame(): void {
+  getSocket().emit('lobby:start-game');
+}
+
+export function kickPlayer(playerId: PlayerId): void {
+  getSocket().emit('lobby:kick', playerId);
 }
